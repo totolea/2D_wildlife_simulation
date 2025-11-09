@@ -62,10 +62,8 @@ def ask_params():
     intro.grid(row=0, column=0, columnspan=2, pady=(0, 10), sticky="w")
 
     fields = [
-        ("Largeur (px)", "W", int,
-         "Définit la largeur totale de la scène de simulation."),
-        ("Hauteur (px)", "H", int,
-         "Hauteur totale de la scène : augmentez-la pour plus d'espace vertical."),
+        ("Largeur (px)", "W", int, None),
+        ("Hauteur (px)", "H", int, None),
         ("Proies initiales", "init_prey", int,
          "Nombre de proies générées au démarrage. Elles se nourrissent des ressources."),
         ("Prédateurs initiaux", "init_pred", int,
@@ -92,10 +90,13 @@ def ask_params():
         main.columnconfigure(1, weight=1)
         entries[key] = (entry, caster)
 
-        ttk.Label(main, text=tooltip, wraplength=360, justify="left").grid(
-            row=row + 1, column=0, columnspan=2, sticky="w", padx=(0, 8), pady=(0, 6)
-        )
-        row += 2
+        if tooltip:
+            ttk.Label(main, text=tooltip, wraplength=360, justify="left").grid(
+                row=row + 1, column=0, columnspan=2, sticky="w", padx=(0, 8), pady=(0, 6)
+            )
+            row += 2
+        else:
+            row += 1
 
     info = ttk.Label(
         main,
@@ -227,6 +228,7 @@ class Creature:
         self.vel = jitter(1.0)
         self.genes = genes
         self.energy = energy
+        self.max_energy = max(energy, 1.0)
         self.col = color
         self.alive = True
         self.age = 0
@@ -308,6 +310,7 @@ class Prey(Creature):
         for i, f in enumerate(foods):
             if np.linalg.norm(f.pos - self.pos) < self.RADIUS + 6:
                 self.energy += f.energy
+                self.max_energy = max(self.max_energy, self.energy)
                 del foods[i]
                 break
 
@@ -349,7 +352,7 @@ class Predator(Creature):
         pos = np.array([rand_range(0, world_w), rand_range(0, world_h)], dtype=float)
         return Predator(pos, genes, energy=rand_range(65, 110), world_w=world_w, world_h=world_h)
 
-    def think(self, preys: List[Prey], move_cost, idle_cost, hunt_cost):
+    def think(self, preys: List[Prey], shelters: List[Shelter], move_cost, idle_cost, hunt_cost):
         nearest_prey = None
         dmin = 1e9
         for pr in preys:
@@ -357,17 +360,37 @@ class Predator(Creature):
             if d < dmin:
                 dmin = d
                 nearest_prey = pr
+        protected_prey = False
+        nearest_shelter = None
+        shelter_dist = None
+        if shelters:
+            nearest_shelter = min(shelters, key=lambda s: np.linalg.norm(s.pos - self.pos))
+            shelter_dist = np.linalg.norm(nearest_shelter.pos - self.pos)
         if nearest_prey and dmin < self.genes.view_radius:
+            if shelters:
+                for s in shelters:
+                    if np.linalg.norm(nearest_prey.pos - s.pos) <= s.radius:
+                        protected_prey = True
+                        nearest_shelter = s
+                        shelter_dist = np.linalg.norm(s.pos - self.pos)
+                        break
             self.steer_to(nearest_prey.pos, intensity=0.8 + 0.6*self.genes.aggressiveness)
             self.energy -= hunt_cost
         else:
             self.vel += jitter(0.15)
             self.energy -= idle_cost
 
+        if nearest_shelter and shelter_dist is not None:
+            if nearest_prey is None and shelter_dist <= nearest_shelter.radius + 70:
+                self.vel *= 0.82
+            elif protected_prey and shelter_dist <= nearest_shelter.radius + 50:
+                self.vel *= 0.84
+
         speed = np.linalg.norm(self.vel)
         self.energy -= move_cost * (speed / max(1e-6, self.genes.max_speed))
 
     def eat(self, preys: List[Prey], shelters: List[Shelter]):
+        eaten = False
         for i, p in enumerate(preys):
             if np.linalg.norm(p.pos - self.pos) < self.RADIUS + p.RADIUS - 1:
                 protected = False
@@ -378,8 +401,11 @@ class Predator(Creature):
                 if protected:
                     continue
                 self.energy += 0.6 * max(35.0, p.energy)
+                self.max_energy = max(self.max_energy, self.energy)
                 del preys[i]
+                eaten = True
                 break
+        return eaten
 
     def reproduce(self, repro_energy_pred, mut_rate, mut_scale):
         if self.energy >= repro_energy_pred:
@@ -421,6 +447,8 @@ class World:
         self.shelters: List[Shelter] = []
         self.tick = 0
         self.paused = False
+        self.shelter_radius = 32.0
+        self.preys_eaten = 0
 
         # Sprites
         self.spr_prey = load_sprite(SPRITE_PREY_PATH, scale=0.2)
@@ -440,8 +468,11 @@ class World:
         np.random.seed(self.cfg["seed"])
         self.preys = [Prey.rand(self.scene_w, self.H) for _ in range(self.cfg["init_prey"])]
         self.predators = [Predator.rand(self.scene_w, self.H) for _ in range(self.cfg["init_pred"])]
-        self.foods = [Food(np.array([rand_range(0, self.scene_w), rand_range(0, self.H)], dtype=float),
-                           self.cfg["food_energy"]) for _ in range(self.cfg["init_food"])]
+        self.foods = []
+        for _ in range(self.cfg["init_food"]):
+            pos = self._random_food_position()
+            if pos is not None:
+                self.foods.append(Food(pos, self.cfg["food_energy"]))
 
     def reset(self):
         self.__init__(self.cfg)
@@ -450,12 +481,34 @@ class World:
     def spawn_food(self, n=1, pos=None):
         if pos is None:
             for _ in range(n):
-                self.foods.append(Food(np.array([rand_range(0, self.scene_w), rand_range(0, self.H)], dtype=float),
-                                       self.cfg["food_energy"]))
+                new_pos = self._random_food_position()
+                if new_pos is not None:
+                    self.foods.append(Food(new_pos, self.cfg["food_energy"]))
         else:
             for _ in range(n):
-                self.foods.append(Food(np.array(pos, dtype=float) + jitter(20),
-                                       self.cfg["food_energy"]))
+                for _ in range(8):
+                    offset = np.array(pos, dtype=float) + jitter(20)
+                    offset[0] = clamp(offset[0], 0, self.scene_w - 1)
+                    offset[1] = clamp(offset[1], 0, self.H - 1)
+                    if not self.is_inside_shelter(offset):
+                        self.foods.append(Food(offset, self.cfg["food_energy"]))
+                        break
+
+    def _random_food_position(self):
+        for _ in range(12):
+            candidate = np.array([rand_range(0, self.scene_w), rand_range(0, self.H)], dtype=float)
+            if not self.is_inside_shelter(candidate):
+                return candidate
+        return None
+
+    def is_inside_shelter(self, pos: np.ndarray, margin: float = 0.0) -> bool:
+        for shelter in self.shelters:
+            if np.linalg.norm(pos - shelter.pos) <= shelter.radius + margin:
+                return True
+        return False
+
+    def adjust_shelter_radius(self, delta: float):
+        self.shelter_radius = clamp(self.shelter_radius + delta, 20.0, min(self.scene_w, self.H) * 0.4)
 
     def step(self):
         if self.paused:
@@ -470,7 +523,8 @@ class World:
             pr.think(self.foods, self.predators, self.shelters,
                      self.cfg["move_cost"], self.cfg["idle_cost"], self.cfg["hunt_cost"])
         for pd in self.predators:
-            pd.think(self.preys, self.cfg["move_cost"], self.cfg["idle_cost"], self.cfg["hunt_cost"])
+            pd.think(self.preys, self.shelters,
+                     self.cfg["move_cost"], self.cfg["idle_cost"], self.cfg["hunt_cost"])
 
         # interactions + vie/mort
         for pr in self.preys:
@@ -478,12 +532,16 @@ class World:
             pr.pos[0] = pr.pos[0] % self.scene_w  # wrap limité à la scène
             pr.eat(self.foods)
             if pr.energy <= 0:
+                pr.energy = 0.0
                 pr.alive = False
         for pd in self.predators:
             pd.step_base()
             pd.pos[0] = pd.pos[0] % self.scene_w
-            pd.eat(self.preys, self.shelters)
+            ate = pd.eat(self.preys, self.shelters)
+            if ate:
+                self.preys_eaten += 1
             if pd.energy <= 0:
+                pd.energy = 0.0
                 pd.alive = False
 
         self.preys = [p for p in self.preys if p.alive]
@@ -532,15 +590,83 @@ class World:
         # proies
         for p in self.preys:
             p.draw(surf, self.spr_prey)
+            self.draw_hunger_bar(surf, p, (76, 129, 235), p.RADIUS)
         # prédateurs
         for p in self.predators:
             p.draw(surf, self.spr_pred)
+            self.draw_hunger_bar(surf, p, (230, 91, 91), p.RADIUS)
 
         # séparateur
         pygame.draw.line(surf, (210, 215, 230), (self.scene_w, 0), (self.scene_w, self.H), 2)
 
         # HUD dans la sidebar
         self.draw_sidebar(surf, fonts, sidebar_rect)
+
+        # info hover
+        self.draw_hover_info(surf, fonts)
+
+    def draw_hunger_bar(self, surf: pygame.Surface, creature: Creature, color: Tuple[int, int, int], radius: float):
+        if creature.max_energy <= 0:
+            return
+        ratio = clamp(creature.energy / creature.max_energy, 0.0, 1.0)
+        bar_w = 30
+        bar_h = 5
+        x = creature.pos[0] - bar_w / 2
+        y = creature.pos[1] - radius - 10
+        rect_bg = pygame.Rect(int(x), int(y), bar_w, bar_h)
+        pygame.draw.rect(surf, (35, 40, 55), rect_bg)
+        inner_w = int((bar_w - 2) * ratio)
+        if inner_w > 0:
+            rect_fg = pygame.Rect(int(x) + 1, int(y) + 1, inner_w, bar_h - 2)
+            pygame.draw.rect(surf, color, rect_fg)
+
+    def draw_hover_info(self, surf: pygame.Surface, fonts):
+        mx, my = pygame.mouse.get_pos()
+        if mx >= self.scene_w:
+            return
+
+        hovered = None
+        min_dist = 1e9
+        mouse_vec = np.array([mx, my], dtype=float)
+        for pred in self.predators:
+            d = np.linalg.norm(pred.pos - mouse_vec)
+            if d <= pred.RADIUS + 6 and d < min_dist:
+                hovered = ("Prédateur", pred, (230, 91, 91))
+                min_dist = d
+        for prey in self.preys:
+            d = np.linalg.norm(prey.pos - mouse_vec)
+            if d <= prey.RADIUS + 6 and d < min_dist:
+                hovered = ("Proie", prey, (76, 129, 235))
+                min_dist = d
+
+        if not hovered:
+            return
+
+        label, entity, color = hovered
+        hunger_ratio = clamp(entity.energy / entity.max_energy if entity.max_energy else 0.0, 0.0, 1.0)
+        percent = int(hunger_ratio * 100)
+        lines = [
+            f"{label}",
+            f"Âge : {entity.age}",
+            f"Faim : {percent}%"
+        ]
+        font = fonts["tiny"]
+        rendered = [font.render(text, True, (240, 240, 245)) for text in lines]
+        width = max(r.get_width() for r in rendered) + 12
+        height = sum(r.get_height() for r in rendered) + 10
+        tooltip = pygame.Surface((width, height), pygame.SRCALPHA)
+        tooltip.fill((20, 24, 35, 220))
+        y = 6
+        for surf_text in rendered:
+            tooltip.blit(surf_text, (6, y))
+            y += surf_text.get_height()
+
+        px = int(entity.pos[0] + entity.RADIUS + 12)
+        py = int(entity.pos[1] - height / 2)
+        px = clamp(px, 4, self.scene_w - width - 4)
+        py = clamp(py, 4, self.H - height - 4)
+        pygame.draw.rect(tooltip, color + (255,), tooltip.get_rect(), width=1, border_radius=6)
+        surf.blit(tooltip, (px, py))
 
     def draw_sidebar(self, surf: pygame.Surface, fonts, rect: pygame.Rect):
         pad = 12
@@ -556,10 +682,29 @@ class World:
         )
         surf.blit(txt, (x, y)); y += 20
 
-        counts = fonts["mono"].render(
-            f"Preys: {len(self.preys)}   Preds: {len(self.predators)}", True, (60, 65, 80)
+        prey_line = fonts["mono"].render(
+            f"Proies: {len(self.preys)}  Mangées: {self.preys_eaten}", True, (60, 65, 80)
         )
-        surf.blit(counts, (x, y)); y += 24
+        surf.blit(prey_line, (x, y)); y += 20
+        pred_line = fonts["mono"].render(
+            f"Prédateurs: {len(self.predators)}", True, (60, 65, 80)
+        )
+        surf.blit(pred_line, (x, y)); y += 26
+
+        avg_pred_hunger = 0.0
+        if self.predators:
+            avg_pred_hunger = float(np.mean([
+                clamp(p.energy / p.max_energy if p.max_energy else 0.0, 0.0, 1.0)
+                for p in self.predators
+            ]))
+        hunger_label = fonts["mono"].render("Faim moy. préd.", True, (60, 65, 80))
+        surf.blit(hunger_label, (x, y)); y += 18
+        bar_w = rect.width - 2 * pad
+        bar_rect = pygame.Rect(x, y, bar_w, 10)
+        pygame.draw.rect(surf, (220, 224, 235), bar_rect, border_radius=4)
+        inner = pygame.Rect(x + 1, y + 1, int((bar_w - 2) * avg_pred_hunger), 8)
+        pygame.draw.rect(surf, (230, 91, 91), inner, border_radius=4)
+        y += 18
 
         # mini-graph popula
         y = self.draw_mini_plot(surf, x, y, rect.width - 2*pad, 70,
@@ -578,8 +723,16 @@ class World:
         y += 8
         help1 = fonts["tiny"].render("SPACE: Pause  |  R: Reset", True, (100, 105, 120))
         surf.blit(help1, (x, y)); y += 16
-        help2 = fonts["tiny"].render("L-Clic: Food (jeu) / Abri (pause)  |  R-Clic: Predator  |  Molette: +/- Prey", True, (100, 105, 120))
-        surf.blit(help2, (x, y))
+        help2 = fonts["tiny"].render("L-Clic: Food (jeu) / Abri (pause)  |  R-Clic: Predator", True, (100, 105, 120))
+        surf.blit(help2, (x, y)); y += 16
+        help3 = fonts["tiny"].render("Molette: +/- Proie (jeu)  |  Molette (pause): Rayon abri", True, (100, 105, 120))
+        surf.blit(help3, (x, y))
+
+        if self.paused:
+            info = fonts["tiny"].render(
+                f"Rayon abri actuel: {int(self.shelter_radius)} px", True, (90, 95, 120)
+            )
+            surf.blit(info, (x, y + 18))
 
     def draw_mini_plot(self, surf, x, y, w, h, series_a, series_b=None, label_left="", colors=((50,50,50),(150,150,150))):
         # fond
@@ -648,7 +801,8 @@ def main():
                 if mx < world.scene_w:
                     if event.button == 1:  # left
                         if world.paused:
-                            world.shelters.append(Shelter(np.array([mx, my], dtype=float)))
+                            world.shelters.append(Shelter(np.array([mx, my], dtype=float),
+                                                          radius=world.shelter_radius))
                         else:
                             n = random.randint(3, 7)
                             world.spawn_food(n=n, pos=(mx, my))
@@ -657,11 +811,16 @@ def main():
                         world.predators.append(Predator(pos, Predator.rand(world.scene_w, world.H).genes,
                                                         energy=80.0, world_w=world.scene_w, world_h=world.H))
                     elif event.button == 4:  # wheel up -> +1 prey
-                        pos = np.array([mx, my], dtype=float)
-                        world.preys.append(Prey(pos, Prey.rand(world.scene_w, world.H).genes,
-                                                energy=50.0, world_w=world.scene_w, world_h=world.H))
+                        if world.paused:
+                            world.adjust_shelter_radius(4.0)
+                        else:
+                            pos = np.array([mx, my], dtype=float)
+                            world.preys.append(Prey(pos, Prey.rand(world.scene_w, world.H).genes,
+                                                    energy=50.0, world_w=world.scene_w, world_h=world.H))
                     elif event.button == 5:  # wheel down -> -1 prey
-                        if world.preys:
+                        if world.paused:
+                            world.adjust_shelter_radius(-4.0)
+                        elif world.preys:
                             world.preys.pop()
 
             elif event.type == pygame.KEYDOWN:
