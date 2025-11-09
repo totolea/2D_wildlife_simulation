@@ -209,6 +209,18 @@ class Food:
         else:
             blit_center(surf, sprite, self.pos)
 
+class Shelter:
+    __slots__ = ("pos", "radius")
+    def __init__(self, pos: np.ndarray, radius: float = 28.0):
+        self.pos = pos.astype(float)
+        self.radius = float(radius)
+
+    def draw(self, surf: pygame.Surface):
+        center = (int(self.pos[0]), int(self.pos[1]))
+        r = int(self.radius)
+        pygame.draw.circle(surf, (205, 205, 215), center, r)
+        pygame.draw.circle(surf, (150, 150, 165), center, r, 2)
+
 class Creature:
     def __init__(self, pos, genes: Genes, energy: float, color: Tuple[int,int,int], world_w, world_h):
         self.pos = pos.astype(float)
@@ -261,7 +273,7 @@ class Prey(Creature):
         pos = np.array([rand_range(0, world_w), rand_range(0, world_h)], dtype=float)
         return Prey(pos, genes, energy=rand_range(35, 75), world_w=world_w, world_h=world_h)
 
-    def think(self, foods: List[Food], predators: List["Predator"], move_cost, idle_cost, hunt_cost):
+    def think(self, foods: List[Food], predators: List["Predator"], shelters: List["Shelter"], move_cost, idle_cost, hunt_cost):
         nearest_pred = None
         dmin = 1e9
         for p in predators:
@@ -270,7 +282,11 @@ class Prey(Creature):
                 dmin = d
                 nearest_pred = p
         if nearest_pred and dmin < self.genes.view_radius * 0.9:
-            self.avoid(nearest_pred.pos, intensity=1.0)
+            if shelters:
+                s_near = min(shelters, key=lambda s: np.linalg.norm(s.pos - self.pos))
+                self.steer_to(s_near.pos, intensity=1.2)
+            else:
+                self.avoid(nearest_pred.pos, intensity=1.0)
             self.energy -= hunt_cost * 0.5
         else:
             nearest_food = None
@@ -351,9 +367,16 @@ class Predator(Creature):
         speed = np.linalg.norm(self.vel)
         self.energy -= move_cost * (speed / max(1e-6, self.genes.max_speed))
 
-    def eat(self, preys: List[Prey]):
+    def eat(self, preys: List[Prey], shelters: List[Shelter]):
         for i, p in enumerate(preys):
             if np.linalg.norm(p.pos - self.pos) < self.RADIUS + p.RADIUS - 1:
+                protected = False
+                for s in shelters:
+                    if np.linalg.norm(p.pos - s.pos) <= s.radius:
+                        protected = True
+                        break
+                if protected:
+                    continue
                 self.energy += 0.6 * max(35.0, p.energy)
                 del preys[i]
                 break
@@ -395,6 +418,7 @@ class World:
         self.preys: List[Prey] = []
         self.predators: List[Predator] = []
         self.foods: List[Food] = []
+        self.shelters: List[Shelter] = []
         self.tick = 0
         self.paused = False
 
@@ -443,7 +467,7 @@ class World:
 
         # comportements
         for pr in self.preys:
-            pr.think(self.foods, self.predators,
+            pr.think(self.foods, self.predators, self.shelters,
                      self.cfg["move_cost"], self.cfg["idle_cost"], self.cfg["hunt_cost"])
         for pd in self.predators:
             pd.think(self.preys, self.cfg["move_cost"], self.cfg["idle_cost"], self.cfg["hunt_cost"])
@@ -458,7 +482,7 @@ class World:
         for pd in self.predators:
             pd.step_base()
             pd.pos[0] = pd.pos[0] % self.scene_w
-            pd.eat(self.preys)
+            pd.eat(self.preys, self.shelters)
             if pd.energy <= 0:
                 pd.alive = False
 
@@ -502,6 +526,9 @@ class World:
         # nourriture
         for f in self.foods:
             f.draw(surf, self.spr_food)
+        # abris
+        for s in self.shelters:
+            s.draw(surf)
         # proies
         for p in self.preys:
             p.draw(surf, self.spr_prey)
@@ -551,7 +578,7 @@ class World:
         y += 8
         help1 = fonts["tiny"].render("SPACE: Pause  |  R: Reset", True, (100, 105, 120))
         surf.blit(help1, (x, y)); y += 16
-        help2 = fonts["tiny"].render("L-Clic: Food  |  R-Clic: Predator  |  Molette: +/- Prey", True, (100, 105, 120))
+        help2 = fonts["tiny"].render("L-Clic: Food (jeu) / Abri (pause)  |  R-Clic: Predator  |  Molette: +/- Prey", True, (100, 105, 120))
         surf.blit(help2, (x, y))
 
     def draw_mini_plot(self, surf, x, y, w, h, series_a, series_b=None, label_left="", colors=((50,50,50),(150,150,150))):
@@ -619,9 +646,12 @@ def main():
                 mx, my = pygame.mouse.get_pos()
                 # uniquement dans la zone scène
                 if mx < world.scene_w:
-                    if event.button == 1:  # left -> paquet de food
-                        n = random.randint(3, 7)
-                        world.spawn_food(n=n, pos=(mx, my))
+                    if event.button == 1:  # left
+                        if world.paused:
+                            world.shelters.append(Shelter(np.array([mx, my], dtype=float)))
+                        else:
+                            n = random.randint(3, 7)
+                            world.spawn_food(n=n, pos=(mx, my))
                     elif event.button == 3:  # right -> +1 predator
                         pos = np.array([mx, my], dtype=float)
                         world.predators.append(Predator(pos, Predator.rand(world.scene_w, world.H).genes,
