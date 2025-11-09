@@ -36,15 +36,6 @@ def ask_params():
         mut_rate=0.12,
         mut_scale=0.15,
         seed=7,
-        shelter_spawn_rate=0.006,
-        shelter_spawn_cooldown=720,
-        shelter_max_active=3,
-        shelter_duration=900,
-        shelter_manual_duration=720,
-        shelter_speed=0.35,
-        shelter_wobble=0.45,
-        shelter_predator_penalty=5,
-        shelter_penalty_radius_factor=1.8,
     )
 
     try:
@@ -220,105 +211,6 @@ class Food:
         else:
             blit_center(surf, sprite, self.pos)
 
-class Shelter:
-    __slots__ = (
-        "pos", "radius", "lifetime", "max_lifetime", "vel", "pulse_phase",
-        "penalty_strength", "penalty_radius_factor", "wobble"
-    )
-
-    def __init__(self, pos: np.ndarray, radius: float, lifetime: int,
-                 velocity: np.ndarray, penalty_strength: float,
-                 penalty_radius_factor: float, wobble: float = 0.35):
-        self.pos = pos.astype(float)
-        self.radius = float(radius)
-        self.lifetime = int(lifetime)
-        self.max_lifetime = max(1, int(lifetime))
-        vel = np.array(velocity, dtype=float)
-        if np.linalg.norm(vel) < 1e-6:
-            ang = rand_range(0, 2 * math.pi)
-            vel = np.array([math.cos(ang), math.sin(ang)], dtype=float) * 0.1
-        self.vel = vel
-        self.pulse_phase = random.random() * 2.0 * math.pi
-        self.penalty_strength = float(penalty_strength)
-        self.penalty_radius_factor = float(max(1.0, penalty_radius_factor))
-        self.wobble = float(max(0.0, wobble))
-
-    @property
-    def active(self) -> bool:
-        return self.lifetime > 0
-
-    def remaining_ratio(self) -> float:
-        if self.max_lifetime <= 0:
-            return 0.0
-        return clamp(self.lifetime / self.max_lifetime, 0.0, 1.0)
-
-    def update(self, world_w: float, world_h: float):
-        if self.lifetime > 0:
-            self.lifetime -= 1
-        self.pulse_phase += 0.05
-        wobble_vec = np.array([
-            math.cos(self.pulse_phase * 1.6),
-            math.sin(self.pulse_phase * 1.9)
-        ], dtype=float) * (self.wobble * 0.12)
-        self.pos += self.vel + wobble_vec
-        self.pos[0] = self.pos[0] % world_w
-        self.pos[1] = self.pos[1] % world_h
-        # légère rotation de la vitesse pour un déplacement organique
-        ang = 0.04 * math.sin(self.pulse_phase * 0.7)
-        cos_a, sin_a = math.cos(ang), math.sin(ang)
-        vx, vy = self.vel
-        self.vel[0] = vx * cos_a - vy * sin_a
-        self.vel[1] = vx * sin_a + vy * cos_a
-
-    def draw(self, surf: pygame.Surface):
-        if not self.active:
-            return
-        ratio = self.remaining_ratio()
-        base_r = max(6, int(self.radius))
-        glow_r = max(base_r + 4, int(self.radius * (1.35 + 0.25 * math.sin(self.pulse_phase * 1.4))))
-        size = glow_r * 2 + 6
-        overlay = pygame.Surface((size, size), pygame.SRCALPHA)
-        center = (size // 2, size // 2)
-
-        halo_alpha = int(60 + 140 * ratio)
-        pygame.draw.circle(overlay, (90, 170, 245, halo_alpha), center, glow_r)
-
-        ripple_r = max(base_r - 2, int(self.radius * (1.05 + 0.08 * math.sin(self.pulse_phase * 2.0))))
-        ripple_alpha = int(120 + 90 * ratio)
-        pygame.draw.circle(overlay, (180, 225, 255, ripple_alpha), center, ripple_r, width=2)
-
-        core_r = max(4, int(self.radius * (0.45 + 0.12 * math.sin(self.pulse_phase * 1.7))))
-        pygame.draw.circle(overlay, (255, 255, 255, int(160 * ratio)), center, core_r)
-
-        surf.blit(
-            overlay,
-            (int(self.pos[0] - size / 2), int(self.pos[1] - size / 2)),
-            special_flags=getattr(pygame, "BLEND_ADD", 0)
-        )
-
-        danger_r = int(self.radius * self.penalty_radius_factor)
-        if danger_r > glow_r:
-            diameter = danger_r * 2 + 6
-            danger_overlay = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
-            d_center = (diameter // 2, diameter // 2)
-            danger_alpha = int(40 + 80 * (1.0 - ratio * 0.7))
-            pygame.draw.circle(danger_overlay, (255, 120, 90, danger_alpha), d_center, danger_r, width=2)
-            surf.blit(
-                danger_overlay,
-                (int(self.pos[0] - diameter / 2), int(self.pos[1] - diameter / 2))
-            )
-
-        # arc de durée restante
-        if self.max_lifetime > 0:
-            angle_ratio = 1.0 - ratio
-            arc_radius = int(self.radius * 0.8)
-            if arc_radius > 4:
-                arc_rect = pygame.Rect(0, 0, arc_radius * 2, arc_radius * 2)
-                arc_rect.center = (int(self.pos[0]), int(self.pos[1]))
-                start_angle = -math.pi / 2
-                end_angle = start_angle + 2 * math.pi * max(0.0, angle_ratio)
-                pygame.draw.arc(surf, (255, 255, 255), arc_rect, start_angle, end_angle, width=2)
-
 class Creature:
     def __init__(self, pos, genes: Genes, energy: float, color: Tuple[int,int,int], world_w, world_h):
         self.pos = pos.astype(float)
@@ -372,7 +264,7 @@ class Prey(Creature):
         pos = np.array([rand_range(0, world_w), rand_range(0, world_h)], dtype=float)
         return Prey(pos, genes, energy=rand_range(35, 75), world_w=world_w, world_h=world_h)
 
-    def think(self, foods: List[Food], predators: List["Predator"], shelters: List["Shelter"], move_cost, idle_cost, hunt_cost):
+    def think(self, foods: List[Food], predators: List["Predator"], move_cost, idle_cost, hunt_cost):
         nearest_pred = None
         dmin = 1e9
         for p in predators:
@@ -381,11 +273,7 @@ class Prey(Creature):
                 dmin = d
                 nearest_pred = p
         if nearest_pred and dmin < self.genes.view_radius * 0.9:
-            if shelters:
-                s_near = min(shelters, key=lambda s: np.linalg.norm(s.pos - self.pos))
-                self.steer_to(s_near.pos, intensity=1.2)
-            else:
-                self.avoid(nearest_pred.pos, intensity=1.0)
+            self.avoid(nearest_pred.pos, intensity=1.0)
             self.energy -= hunt_cost * 0.5
         else:
             nearest_food = None
@@ -449,7 +337,7 @@ class Predator(Creature):
         pos = np.array([rand_range(0, world_w), rand_range(0, world_h)], dtype=float)
         return Predator(pos, genes, energy=rand_range(65, 110), world_w=world_w, world_h=world_h)
 
-    def think(self, preys: List[Prey], shelters: List[Shelter], move_cost, idle_cost, hunt_cost):
+    def think(self, preys: List[Prey], move_cost, idle_cost, hunt_cost):
         nearest_prey = None
         dmin = 1e9
         for pr in preys:
@@ -457,46 +345,20 @@ class Predator(Creature):
             if d < dmin:
                 dmin = d
                 nearest_prey = pr
-        protected_prey = False
-        nearest_shelter = None
-        shelter_dist = None
-        if shelters:
-            nearest_shelter = min(shelters, key=lambda s: np.linalg.norm(s.pos - self.pos))
-            shelter_dist = np.linalg.norm(nearest_shelter.pos - self.pos)
         if nearest_prey and dmin < self.genes.view_radius:
-            if shelters:
-                for s in shelters:
-                    if np.linalg.norm(nearest_prey.pos - s.pos) <= s.radius:
-                        protected_prey = True
-                        nearest_shelter = s
-                        shelter_dist = np.linalg.norm(s.pos - self.pos)
-                        break
             self.steer_to(nearest_prey.pos, intensity=0.8 + 0.6*self.genes.aggressiveness)
             self.energy -= hunt_cost
         else:
             self.vel += jitter(0.15)
             self.energy -= idle_cost
 
-        if nearest_shelter and shelter_dist is not None:
-            if nearest_prey is None and shelter_dist <= nearest_shelter.radius + 70:
-                self.vel *= 0.82
-            elif protected_prey and shelter_dist <= nearest_shelter.radius + 50:
-                self.vel *= 0.84
-
         speed = np.linalg.norm(self.vel)
         self.energy -= move_cost * (speed / max(1e-6, self.genes.max_speed))
 
-    def eat(self, preys: List[Prey], shelters: List[Shelter]):
+    def eat(self, preys: List[Prey]):
         eaten = False
         for i, p in enumerate(preys):
             if np.linalg.norm(p.pos - self.pos) < self.RADIUS + p.RADIUS - 1:
-                protected = False
-                for s in shelters:
-                    if np.linalg.norm(p.pos - s.pos) <= s.radius:
-                        protected = True
-                        break
-                if protected:
-                    continue
                 # Remet la barre de faim (énergie) à 100 plutôt que d'accumuler
                 self.energy = 100.0
                 self.max_energy = max(self.max_energy, self.energy)
@@ -542,12 +404,8 @@ class World:
         self.preys: List[Prey] = []
         self.predators: List[Predator] = []
         self.foods: List[Food] = []
-        self.shelters: List[Shelter] = []
         self.tick = 0
         self.paused = False
-        self.shelter_radius = 32.0
-        self.shelter_spawn_cooldown = 0
-        self.manual_shelter_duration = int(self.cfg.get("shelter_manual_duration", 720))
         self.preys_eaten = 0
 
         # Sprites
@@ -571,7 +429,6 @@ class World:
         self.hist_mean_pred_speed = []
 
     def populate(self):
-        rnd = np.random.RandomState(self.cfg["seed"])
         random.seed(self.cfg["seed"])
         np.random.seed(self.cfg["seed"])
         self.preys = [Prey.rand(self.scene_w, self.H) for _ in range(self.cfg["init_prey"])]
@@ -581,15 +438,6 @@ class World:
             pos = self._random_food_position()
             if pos is not None:
                 self.foods.append(Food(pos, self.cfg["food_energy"]))
-        initial_shelters = min(int(self.cfg.get("shelter_max_active", 0)), 2)
-        for _ in range(initial_shelters):
-            radius = rand_range(self.shelter_radius * 0.9, self.shelter_radius * 1.15)
-            pos = self._random_shelter_position(radius)
-            if pos is not None:
-                duration = int(self.cfg.get("shelter_duration", 900) * rand_range(0.8, 1.2))
-                self.add_shelter(pos, radius=radius, duration=duration, manual=False)
-        if initial_shelters:
-            self.shelter_spawn_cooldown = int(self.cfg.get("shelter_spawn_cooldown", 600) * 0.5)
 
     def reset(self):
         self.__init__(self.cfg)
@@ -603,138 +451,28 @@ class World:
                     self.foods.append(Food(new_pos, self.cfg["food_energy"]))
         else:
             for _ in range(n):
-                for _ in range(8):
-                    offset = np.array(pos, dtype=float) + jitter(20)
-                    offset[0] = clamp(offset[0], 0, self.scene_w - 1)
-                    offset[1] = clamp(offset[1], 0, self.H - 1)
-                    if not self.is_inside_shelter(offset):
-                        self.foods.append(Food(offset, self.cfg["food_energy"]))
-                        break
+                offset = np.array(pos, dtype=float) + jitter(20)
+                offset[0] = clamp(offset[0], 0, self.scene_w - 1)
+                offset[1] = clamp(offset[1], 0, self.H - 1)
+                self.foods.append(Food(offset, self.cfg["food_energy"]))
 
     def _random_food_position(self):
-        for _ in range(12):
-            candidate = np.array([rand_range(0, self.scene_w), rand_range(0, self.H)], dtype=float)
-            if not self.is_inside_shelter(candidate):
-                return candidate
-        return None
-
-    def _random_shelter_position(self, radius: float):
-        margin = radius + 12
-        for _ in range(24):
-            candidate = np.array([
-                rand_range(margin, max(margin + 1, self.scene_w - margin)),
-                rand_range(margin, max(margin + 1, self.H - margin))
-            ], dtype=float)
-            if not self.is_inside_shelter(candidate, margin=radius * 1.3):
-                return candidate
-        return None
-
-    def add_shelter(self, pos: np.ndarray, radius: float | None = None,
-                    duration: int | None = None, manual: bool = False,
-                    allow_overlap: bool = False) -> Shelter | None:
-        radius = float(radius if radius is not None else self.shelter_radius)
-        if radius <= 6:
-            radius = 6.0
-        if duration is None:
-            duration = int(self.cfg.get("shelter_duration", 900))
-        duration = max(30, int(duration))
-        # éviter les superpositions trop fortes
-        if not allow_overlap and self.is_inside_shelter(np.array(pos, dtype=float), margin=radius * 0.6):
-            return None
-        angle = rand_range(0.0, 2.0 * math.pi)
-        speed = max(0.02, float(self.cfg.get("shelter_speed", 0.3)))
-        velocity = np.array([math.cos(angle), math.sin(angle)], dtype=float) * speed
-        shelter = Shelter(
-            np.array(pos, dtype=float),
-            radius=radius,
-            lifetime=duration,
-            velocity=velocity,
-            penalty_strength=float(self.cfg.get("shelter_predator_penalty", 0.15)),
-            penalty_radius_factor=float(self.cfg.get("shelter_penalty_radius_factor", 1.4)),
-            wobble=float(self.cfg.get("shelter_wobble", 0.4))
-        )
-        self.shelters.append(shelter)
-        if manual:
-            cooldown = int(self.cfg.get("shelter_spawn_cooldown", 600) * 0.6)
-            self.shelter_spawn_cooldown = max(self.shelter_spawn_cooldown, cooldown)
-        else:
-            self.shelter_spawn_cooldown = int(self.cfg.get("shelter_spawn_cooldown", 600))
-        return shelter
-
-    def is_inside_shelter(self, pos: np.ndarray, margin: float = 0.0) -> bool:
-        for shelter in self.shelters:
-            if not shelter.active:
-                continue
-            if np.linalg.norm(pos - shelter.pos) <= shelter.radius + margin:
-                return True
-        return False
-
-    def adjust_shelter_radius(self, delta: float):
-        self.shelter_radius = clamp(self.shelter_radius + delta, 20.0, min(self.scene_w, self.H) * 0.4)
-
-    def update_shelters(self):
-        updated: List[Shelter] = []
-        for shelter in self.shelters:
-            shelter.update(self.scene_w, self.H)
-            if shelter.active:
-                updated.append(shelter)
-        self.shelters = updated
-        if self.shelter_spawn_cooldown > 0:
-            self.shelter_spawn_cooldown -= 1
-
-    def maybe_spawn_shelter(self):
-        if self.cfg.get("shelter_max_active", 0) <= 0:
-            return
-        if len(self.shelters) >= int(self.cfg.get("shelter_max_active", 0)):
-            return
-        if self.shelter_spawn_cooldown > 0:
-            return
-        if random.random() < float(self.cfg.get("shelter_spawn_rate", 0.0)):
-            base_radius = self.shelter_radius
-            radius = rand_range(base_radius * 0.85, base_radius * 1.25)
-            pos = self._random_shelter_position(radius)
-            if pos is not None:
-                duration = int(self.cfg.get("shelter_duration", 900) * rand_range(0.75, 1.25))
-                self.add_shelter(pos, radius=radius, duration=duration, manual=False)
-
-    def predator_shelter_penalty(self, predator: Predator) -> float:
-        if not self.shelters:
-            return 0.0
-        penalty = 0.0
-        speed = np.linalg.norm(predator.vel)
-        for shelter in self.shelters:
-            if not shelter.active:
-                continue
-            influence = shelter.radius * shelter.penalty_radius_factor
-            if influence <= 0:
-                continue
-            dist = np.linalg.norm(predator.pos - shelter.pos)
-            if dist > influence:
-                continue
-            closeness = 1.0 - dist / influence
-            speed_ratio = clamp(speed / max(1e-6, predator.genes.max_speed), 0.0, 1.0)
-            camp_factor = 1.0 - speed_ratio
-            life_factor = 0.5 + 0.5 * shelter.remaining_ratio()
-            penalty += shelter.penalty_strength * (0.25 + 0.75 * closeness) * (0.3 + 0.7 * camp_factor) * life_factor
-        return penalty
+        return np.array([rand_range(0, self.scene_w), rand_range(0, self.H)], dtype=float)
 
     def step(self):
         if self.paused:
             return
         self.tick += 1
 
-        self.update_shelters()
-        self.maybe_spawn_shelter()
-
         if random.random() < self.cfg["food_spawn_rate"]:
             self.spawn_food(n=random.randint(1, 2))
 
         # comportements
         for pr in self.preys:
-            pr.think(self.foods, self.predators, self.shelters,
+            pr.think(self.foods, self.predators,
                      self.cfg["move_cost"], self.cfg["idle_cost"], self.cfg["hunt_cost"])
         for pd in self.predators:
-            pd.think(self.preys, self.shelters,
+            pd.think(self.preys,
                      self.cfg["move_cost"], self.cfg["idle_cost"], self.cfg["hunt_cost"])
 
         # interactions + vie/mort
@@ -748,10 +486,7 @@ class World:
         for pd in self.predators:
             pd.step_base()
             pd.pos[0] = pd.pos[0] % self.scene_w
-            penalty = self.predator_shelter_penalty(pd)
-            if penalty > 0.0:
-                pd.energy -= penalty
-            ate = pd.eat(self.preys, self.shelters)
+            ate = pd.eat(self.preys)
             if ate:
                 self.preys_eaten += 1
             if pd.energy <= 0:
@@ -798,9 +533,6 @@ class World:
         # nourriture
         for f in self.foods:
             f.draw(surf, self.spr_food)
-        # abris
-        for s in self.shelters:
-            s.draw(surf)
         # proies
         for p in self.preys:
             p.draw(surf, self.spr_prey)
@@ -840,44 +572,6 @@ class World:
             return
 
         mouse_vec = np.array([mx, my], dtype=float)
-        hovered_shelter = None
-        hovered_dist = 1e9
-        for shelter in self.shelters:
-            if not shelter.active:
-                continue
-            reach = shelter.radius * shelter.penalty_radius_factor
-            dist = np.linalg.norm(shelter.pos - mouse_vec)
-            if dist <= reach and dist < hovered_dist:
-                hovered_shelter = shelter
-                hovered_dist = dist
-        if hovered_shelter is not None:
-            fps = max(1, int(self.cfg.get("fps", 60)))
-            seconds_left = hovered_shelter.lifetime / fps
-            lines = [
-                "Abri mobile", 
-                f"Temps restant : {seconds_left:.1f}s",
-                f"Rayon sûr : {int(hovered_shelter.radius)} px",
-                f"Zone pénalité : {int(hovered_shelter.radius * hovered_shelter.penalty_radius_factor)} px",
-                f"Coût camp : -{hovered_shelter.penalty_strength:.2f}/tick"
-            ]
-            font = fonts["tiny"]
-            rendered = [font.render(text, True, (230, 238, 255)) for text in lines]
-            width = max(r.get_width() for r in rendered) + 14
-            height = sum(r.get_height() for r in rendered) + 12
-            tooltip = pygame.Surface((width, height), pygame.SRCALPHA)
-            tooltip.fill((30, 42, 65, 220))
-            y = 6
-            for surf_text in rendered:
-                tooltip.blit(surf_text, (7, y))
-                y += surf_text.get_height()
-            px = int(hovered_shelter.pos[0] + hovered_shelter.radius + 16)
-            py = int(hovered_shelter.pos[1] - height / 2)
-            px = clamp(px, 6, self.scene_w - width - 6)
-            py = clamp(py, 6, self.H - height - 6)
-            pygame.draw.rect(tooltip, (140, 190, 255, 255), tooltip.get_rect(), width=1, border_radius=6)
-            surf.blit(tooltip, (px, py))
-            return
-
         hovered = None
         min_dist = 1e9
         for pred in self.predators:
@@ -942,18 +636,6 @@ class World:
             f"Prédateurs: {len(self.predators)}", True, (60, 65, 80)
         )
         surf.blit(pred_line, (x, y)); y += 26
-        if self.cfg.get("shelter_max_active", 0) > 0:
-            shelter_line = fonts["mono"].render(
-                f"Abris actifs: {len(self.shelters)}", True, (60, 65, 80)
-            )
-            surf.blit(shelter_line, (x, y)); y += 20
-            if self.shelter_spawn_cooldown > 0:
-                secs = self.shelter_spawn_cooldown / max(1, int(self.cfg.get("fps", 60)))
-                cooldown_text = fonts["tiny"].render(
-                    f"Prochain abri ~ {secs:.1f}s", True, (100, 105, 120)
-                )
-                surf.blit(cooldown_text, (x, y)); y += 18
-
         avg_pred_hunger = 0.0
         if self.predators:
             avg_pred_hunger = float(np.mean([
@@ -986,19 +668,10 @@ class World:
         y += 8
         help1 = fonts["tiny"].render("SPACE: Pause  |  R: Reset", True, (100, 105, 120))
         surf.blit(help1, (x, y)); y += 16
-        help2 = fonts["tiny"].render("L-Clic: Food (jeu) / Abri (pause)  |  R-Clic: Predator", True, (100, 105, 120))
+        help2 = fonts["tiny"].render("L-Clic: Food  |  R-Clic: Predator", True, (100, 105, 120))
         surf.blit(help2, (x, y)); y += 16
-        help3 = fonts["tiny"].render("Molette: +/- Proie (jeu)  |  Molette (pause): Rayon abri", True, (100, 105, 120))
-        surf.blit(help3, (x, y))
-        y += 16
-        help4 = fonts["tiny"].render("Abris dyn.: spawn auto, pénalité anti-camping", True, (100, 105, 120))
-        surf.blit(help4, (x, y))
-
-        if self.paused:
-            info = fonts["tiny"].render(
-                f"Rayon abri actuel: {int(self.shelter_radius)} px", True, (90, 95, 120)
-            )
-            surf.blit(info, (x, y + 18))
+        help3 = fonts["tiny"].render("Molette: +/- Proie (jeu)", True, (100, 105, 120))
+        surf.blit(help3, (x, y)); y += 16
 
     def draw_mini_plot(self, surf, x, y, w, h, series_a, series_b=None, label_left="", colors=((50,50,50),(150,150,150))):
         # fond
@@ -1066,32 +739,18 @@ def main():
                 # uniquement dans la zone scène
                 if mx < world.scene_w:
                     if event.button == 1:  # left
-                        if world.paused:
-                            world.add_shelter(
-                                np.array([mx, my], dtype=float),
-                                radius=world.shelter_radius,
-                                duration=world.manual_shelter_duration,
-                                manual=True,
-                                allow_overlap=True
-                            )
-                        else:
-                            n = random.randint(3, 7)
-                            world.spawn_food(n=n, pos=(mx, my))
+                        n = random.randint(3, 7)
+                        world.spawn_food(n=n, pos=(mx, my))
                     elif event.button == 3:  # right -> +1 predator
                         pos = np.array([mx, my], dtype=float)
                         world.predators.append(Predator(pos, Predator.rand(world.scene_w, world.H).genes,
                                                         energy=80.0, world_w=world.scene_w, world_h=world.H))
                     elif event.button == 4:  # wheel up -> +1 prey
-                        if world.paused:
-                            world.adjust_shelter_radius(4.0)
-                        else:
-                            pos = np.array([mx, my], dtype=float)
-                            world.preys.append(Prey(pos, Prey.rand(world.scene_w, world.H).genes,
-                                                    energy=50.0, world_w=world.scene_w, world_h=world.H))
+                        pos = np.array([mx, my], dtype=float)
+                        world.preys.append(Prey(pos, Prey.rand(world.scene_w, world.H).genes,
+                                                energy=50.0, world_w=world.scene_w, world_h=world.H))
                     elif event.button == 5:  # wheel down -> -1 prey
-                        if world.paused:
-                            world.adjust_shelter_radius(-4.0)
-                        elif world.preys:
+                        if world.preys:
                             world.preys.pop()
 
             elif event.type == pygame.KEYDOWN:
