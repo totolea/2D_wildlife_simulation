@@ -22,8 +22,8 @@ def ask_params():
         H=700,
         sidebar=260,
         fps=60,
-        init_prey=30,
-        init_pred=6,
+        init_prey=6,
+        init_pred=2,
         init_food=120,
         food_spawn_rate=0.02,
         food_energy=22.0,
@@ -62,8 +62,6 @@ def ask_params():
     intro.grid(row=0, column=0, columnspan=2, pady=(0, 10), sticky="w")
 
     fields = [
-        ("Largeur (px)", "W", int, None),
-        ("Hauteur (px)", "H", int, None),
         ("Proies initiales", "init_prey", int,
          "Nombre de proies générées au démarrage. Elles se nourrissent des ressources."),
         ("Prédateurs initiaux", "init_pred", int,
@@ -85,7 +83,9 @@ def ask_params():
     for label, key, caster, tooltip in fields:
         ttk.Label(main, text=label).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=(4, 0))
         entry = ttk.Entry(main)
-        entry.insert(0, str(base_cfg[key]))
+        # Ne pas préremplir largeur/hauteur pour éviter des valeurs par défaut visibles
+        if key not in ("W", "H"):
+            entry.insert(0, str(base_cfg[key]))
         entry.grid(row=row, column=1, sticky="ew", pady=(4, 0))
         main.columnconfigure(1, weight=1)
         entries[key] = (entry, caster)
@@ -400,7 +400,8 @@ class Predator(Creature):
                         break
                 if protected:
                     continue
-                self.energy += 0.6 * max(35.0, p.energy)
+                # Remet la barre de faim (énergie) à 100 plutôt que d'accumuler
+                self.energy = 100.0
                 self.max_energy = max(self.max_energy, self.energy)
                 del preys[i]
                 eaten = True
@@ -554,11 +555,7 @@ class World:
             if b: newborns_p.append(b)
         self.preys.extend(newborns_p)
 
-        newborns_d = []
-        for d in self.predators:
-            b = d.reproduce(self.cfg["repro_energy_pred"], self.cfg["mut_rate"], self.cfg["mut_scale"])
-            if b: newborns_d.append(b)
-        self.predators.extend(newborns_d)
+        # Pas de reproduction de prédateurs pour éviter le dédoublement après repas
 
         # met à jour historiques
         self.hist_prey.append(len(self.preys))
