@@ -16,96 +16,124 @@ SPRITE_FOOD_PATH = "ressource.png"  # ex: "/mnt/data/ressource.png"
 # Param GUI (Tkinter)
 # =======================
 def ask_params():
-    """Fenêtre simple Tkinter pour saisir des paramètres avant de lancer Pygame."""
+    """Fenêtre Tkinter simplifiée pour saisir les paramètres essentiels."""
+    base_cfg = dict(
+        W=1000,
+        H=700,
+        sidebar=260,
+        fps=60,
+        init_prey=30,
+        init_pred=6,
+        init_food=120,
+        food_spawn_rate=0.02,
+        food_energy=22.0,
+        move_cost=0.02,
+        idle_cost=0.004,
+        hunt_cost=0.04,
+        repro_energy_prey=65.0,
+        repro_energy_pred=90.0,
+        mut_rate=0.12,
+        mut_scale=0.15,
+        seed=7,
+    )
+
     try:
         import tkinter as tk
         from tkinter import ttk
     except Exception:
         # Pas de Tkinter ? On renvoie des valeurs par défaut
-        return dict(
-            W=1000, H=700, sidebar=260, fps=60,
-            init_prey=30, init_pred=6, init_food=120,
-            food_spawn_rate=0.02,
-            food_energy=22.0,
-            move_cost=0.02, idle_cost=0.004, hunt_cost=0.04,
-            repro_energy_prey=65.0, repro_energy_pred=90.0,
-            mut_rate=0.12, mut_scale=0.15,
-            seed=7
-        )
+        return base_cfg
 
     root = tk.Tk()
-    root.title("EcoSim — Paramètres de départ")
+    root.title("EcoSim — Paramètres essentiels")
 
-    defaults = {
-        "Largeur (W)": 1000,
-        "Hauteur (H)": 700,
-        "Sidebar (px)": 260,
-        "FPS": 60,
-        "Préys init": 30,
-        "Preds init": 6,
-        "Food init": 120,
-        "Food spawn rate": 0.02,
-        "Food energy": 22.0,
-        "Move cost": 0.02,
-        "Idle cost": 0.004,
-        "Hunt cost": 0.04,
-        "Repro energy prey": 65.0,
-        "Repro energy pred": 90.0,
-        "Mutation rate": 0.12,
-        "Mutation scale": 0.15,
-        "Seed": 7,
-    }
+    main = ttk.Frame(root, padding=12)
+    main.grid(row=0, column=0, sticky="nsew")
+    root.columnconfigure(0, weight=1)
+    root.rowconfigure(0, weight=1)
+
+    intro = ttk.Label(
+        main,
+        text="Ajustez les paramètres principaux de la simulation." \
+             " Chaque champ est accompagné d'une courte explication pour clarifier son rôle.",
+        wraplength=360,
+        justify="left"
+    )
+    intro.grid(row=0, column=0, columnspan=2, pady=(0, 10), sticky="w")
+
+    fields = [
+        ("Largeur (px)", "W", int,
+         "Définit la largeur totale de la scène de simulation."),
+        ("Hauteur (px)", "H", int,
+         "Hauteur totale de la scène : augmentez-la pour plus d'espace vertical."),
+        ("Proies initiales", "init_prey", int,
+         "Nombre de proies générées au démarrage. Elles se nourrissent des ressources."),
+        ("Prédateurs initiaux", "init_pred", int,
+         "Nombre de prédateurs présents au lancement. Ils chassent les proies."),
+        ("Ressources initiales", "init_food", int,
+         "Quantité de nourriture semée au début dans l'environnement."),
+        ("Taux d'apparition de nourriture", "food_spawn_rate", float,
+         "Probabilité par tick qu'une ressource aléatoire apparaisse."),
+        ("Énergie d'une ressource", "food_energy", float,
+         "Quantité d'énergie gagnée par une proie lorsqu'elle consomme une ressource."),
+        ("Intensité de mutation", "mut_rate", float,
+         "Probabilité qu'un gène (vitesse, vision, agressivité) mute à chaque reproduction."),
+        ("Graine aléatoire", "seed", int,
+         "Fixe la graine de l'aléatoire pour rendre la simulation reproductible."),
+    ]
 
     entries = {}
-    for i, (label, val) in enumerate(defaults.items()):
-        ttk.Label(root, text=label).grid(row=i, column=0, sticky="w", padx=8, pady=4)
-        e = ttk.Entry(root)
-        e.insert(0, str(val))
-        e.grid(row=i, column=1, padx=8, pady=4)
-        entries[label] = e
+    row = 1
+    for label, key, caster, tooltip in fields:
+        ttk.Label(main, text=label).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=(4, 0))
+        entry = ttk.Entry(main)
+        entry.insert(0, str(base_cfg[key]))
+        entry.grid(row=row, column=1, sticky="ew", pady=(4, 0))
+        main.columnconfigure(1, weight=1)
+        entries[key] = (entry, caster)
 
-    params = {}
+        ttk.Label(main, text=tooltip, wraplength=360, justify="left").grid(
+            row=row + 1, column=0, columnspan=2, sticky="w", padx=(0, 8), pady=(0, 6)
+        )
+        row += 2
 
-    def parse_float(name):
+    info = ttk.Label(
+        main,
+        text="Les autres paramètres utilisent des valeurs équilibrées par défaut.",
+        wraplength=360,
+        justify="left"
+    )
+    info.grid(row=row, column=0, columnspan=2, pady=(6, 12), sticky="we")
+
+    def parse_value(key, widget, caster):
+        raw = widget.get().strip()
+        if not raw:
+            return base_cfg[key]
         try:
-            return float(entries[name].get())
+            return caster(float(raw)) if caster is int else caster(raw)
         except Exception:
-            return float(defaults[name])
+            return base_cfg[key]
 
-    def parse_int(name):
-        try:
-            return int(float(entries[name].get()))
-        except Exception:
-            return int(defaults[name])
+    def on_validate():
+        cfg = base_cfg.copy()
+        for key, (entry_widget, caster) in entries.items():
+            cfg[key] = parse_value(key, entry_widget, caster)
+        # mut_rate pilote également mut_scale pour rester cohérent
+        cfg["mut_scale"] = max(0.01, cfg["mut_rate"] * 1.25)
+        root.destroy()
+        return cfg
+
+    result = {}
 
     def on_ok():
-        params.update(dict(
-            W=parse_int("Largeur (W)"),
-            H=parse_int("Hauteur (H)"),
-            sidebar=parse_int("Sidebar (px)"),
-            fps=parse_int("FPS"),
-            init_prey=parse_int("Préys init"),
-            init_pred=parse_int("Preds init"),
-            init_food=parse_int("Food init"),
-            food_spawn_rate=parse_float("Food spawn rate"),
-            food_energy=parse_float("Food energy"),
-            move_cost=parse_float("Move cost"),
-            idle_cost=parse_float("Idle cost"),
-            hunt_cost=parse_float("Hunt cost"),
-            repro_energy_prey=parse_float("Repro energy prey"),
-            repro_energy_pred=parse_float("Repro energy pred"),
-            mut_rate=parse_float("Mutation rate"),
-            mut_scale=parse_float("Mutation scale"),
-            seed=parse_int("Seed"),
-        ))
-        root.destroy()
+        result.update(on_validate())
 
-    ttk.Button(root, text="Lancer", command=on_ok).grid(
-        row=len(defaults), column=0, columnspan=2, pady=10
+    ttk.Button(main, text="Lancer la simulation", command=on_ok).grid(
+        row=row + 1, column=0, columnspan=2, pady=(0, 4)
     )
 
     root.mainloop()
-    return params
+    return result or base_cfg.copy()
 
 # =======================
 # Utils
