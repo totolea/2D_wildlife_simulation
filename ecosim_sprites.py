@@ -11,6 +11,7 @@ import pygame
 SPRITE_PRED_PATH = "predator.png"   # ex: "/mnt/data/predator.png"
 SPRITE_PREY_PATH = "prey.png"       # ex: "/mnt/data/prey.png"
 SPRITE_FOOD_PATH = "ressource.png"  # ex: "/mnt/data/ressource.png"
+SPRITE_BG_PATH = "background.png"    # image de fond pour la zone de simulation
 
 # =======================
 # Param GUI (Tkinter)
@@ -27,9 +28,9 @@ def ask_params():
         init_food=120,
         food_spawn_rate=0.02,
         food_energy=22.0,
-        move_cost=0.02,
-        idle_cost=0.004,
-        hunt_cost=0.04,
+        move_cost=0.024,
+        idle_cost=0.005,
+        hunt_cost=0.05,
         repro_energy_prey=65.0,
         repro_energy_pred=90.0,
         mut_rate=0.12,
@@ -42,8 +43,8 @@ def ask_params():
         shelter_manual_duration=720,
         shelter_speed=0.35,
         shelter_wobble=0.45,
-        shelter_predator_penalty=0.18,
-        shelter_penalty_radius_factor=1.4,
+        shelter_predator_penalty=5,
+        shelter_penalty_radius_factor=1.8,
     )
 
     try:
@@ -553,6 +554,14 @@ class World:
         self.spr_prey = load_sprite(SPRITE_PREY_PATH, scale=0.2)
         self.spr_pred = load_sprite(SPRITE_PRED_PATH, scale=0.3)
         self.spr_food = load_sprite(SPRITE_FOOD_PATH, scale=0.1)
+        # Background de la scène
+        self.bg_img = None
+        _bg_raw = load_sprite(SPRITE_BG_PATH, scale=1.0)
+        if _bg_raw is not None:
+            try:
+                self.bg_img = pygame.transform.smoothscale(_bg_raw, (self.scene_w, self.H))
+            except Exception:
+                self.bg_img = None
 
         # Stats historiques (pour mini-graphes)
         self.hist_len = 300
@@ -779,7 +788,11 @@ class World:
         # zone scène
         scene_rect = pygame.Rect(0, 0, self.scene_w, self.H)
         sidebar_rect = pygame.Rect(self.scene_w, 0, self.sidebar, self.H)
-        surf.fill((242, 246, 255), scene_rect)
+        if self.bg_img is not None:
+            # dessine le fond image sur la zone scène
+            surf.blit(self.bg_img, (0, 0))
+        else:
+            surf.fill((242, 246, 255), scene_rect)
         surf.fill((250, 250, 252), sidebar_rect)
 
         # nourriture
